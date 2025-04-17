@@ -32,53 +32,28 @@
    See scripts/ for test scripts and examples.
  
    ```bash
-   chmod +x transfer.py
+   # ensure the transfer.py agent and test script are executable
+   chmod +x scripts/*.*
+   # add the scripts directory to your PATH
+   export PATH=$PATH:$(pwd)/scripts
    ```
 
 3. **Configure Git LFS to Use the Custom Transfer Agent**
 
-   ```bash
-   git config lfs.customtransfer.local.path "./transfer.py"
-   git config lfs.customtransfer.local.args ""
-   git config lfs.standalonetransferagent local
-   ```
+   
+   See [scripts/setup-lfs.sh](scripts/setup-lfs.sh)
 
 
    These settings tell Git LFS to use `transfer.py` as the custom transfer agent named `local`.
 
 ## Usage
 
-1. **Initialize Git LFS in Your Repository**
+1. Create a git repository, install lfs, add files and push to git
+  See [create-repo-test](scripts/create-repo-test.sh)
+2. Clone the repo
+  See [clone-repo-test](scripts/clone-repo-test.sh)
+   
 
-   ```bash
-   git lfs install
-   ```
-
-
-2. **Track Files with Git LFS**
-
-   ```bash
-   git lfs track "*.bin"
-   ```
-
-
-3. **Add and Commit Files**
-
-   ```bash
-   git add .gitattributes
-   git add your_large_file.bin
-   git commit -m "Add large file"
-   ```
-
-
-4. **Push to Remote Repository**
-
-   ```bash
-   git push origin main
-   ```
-
-
-   Git LFS will invoke the custom transfer agent for uploading the large file.
 
 ## Configuration
 
@@ -95,6 +70,7 @@ Ensure that the specified directory exists and is writable.
 ## Extending to Other Storage Backends
 
 To adapt the transfer agent for other storage solutions like AWS S3 or Google Cloud Storage, you'll need to modify the `handle_upload` and `handle_download` functions in `transfer.py`. For example, integrating with AWS S3 would involve using the `boto3` library to upload and download objects.
+># TODO Do this in GO ... 
 
 ## Troubleshooting
 
