@@ -10,6 +10,7 @@ GIT_LFS_SKIP_SMUDGE=1 git clone --verbose  https://github.com/bwalsh/ttt
 cd ttt
 
 setup-lfs.sh
+setup-precommit-meta-check.sh
 
 # Check if myfile.bin is a Git LFS pointer file
 cat myfile.bin  | grep -q git-lfs && echo "OK: is lfs pointer" || echo "FAIL: expected a lfs pointer"

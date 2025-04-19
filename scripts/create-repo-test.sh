@@ -13,6 +13,7 @@ git init
 
 # Run the setup script to configure Git LFS
 setup-lfs.sh
+setup-git-hooks.sh
 
 # Add a remote origin pointing to the GitHub repository
 git remote add origin https://github.com/bwalsh/ttt.git
