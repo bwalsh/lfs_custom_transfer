@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+import os
+import sys
+import re
+
+from urllib.parse import urlparse
+
+def is_valid_url(url):
+    parsed = urlparse(url)
+    return bool(parsed.scheme) and bool(parsed.netloc)
+
+def parse_bucket_object(bucket_object):
+    parsed = urlparse(bucket_object)
+    path = parsed.path.lstrip('/')  # Extract the path, removing leading '/'
+    return parsed.scheme, parsed.netloc, path
+
+def is_valid_path(path):
+    try:
+        normalized_path = str(os.path.normpath(path))
+        if not normalized_path:
+            print("Error: Path is empty after normalization.", file=sys.stderr)
+            return False
+        # check if path is relative
+        if os.path.isabs(normalized_path):
+            print("Error: Path is not relative to current directory", file=sys.stderr)
+            return False
+        # check if path has no illegal characters
+        match = re.search(pattern=r'[<>:"\\|?*]', string=normalized_path)
+        if match:
+            print(f"Error: Path contains illegal characters. {match}", file=sys.stderr)
+            return False
+
+        return True
+    except Exception as e:
+        print(f"Error: {e}")
+        return False
+
+def main():
+    # Check if any arguments are provided
+    if len(sys.argv) < 2:
+        print("Error: No file arguments provided to the add command.")
+        sys.exit(1)
+
+    # Regex to match s3:// and gs:// URLs
+    valid_protocol = re.compile(r"^(s3|gs|az)$")
+
+    # Iterate over the provided arguments
+    for bucket_object in sys.argv[1:]:
+        assert is_valid_url(bucket_object), f"Invalid URL: {bucket_object}"
+        scheme, netloc, path = parse_bucket_object(bucket_object)
+        match = valid_protocol.match(scheme)
+        if match:
+            # check url is a valid s3 or gs url
+
+            storage_type = scheme
+            bucket_name = netloc
+            bucket_path = path
+
+            print(f"Info: '{bucket_object}' appears to be a {storage_type.upper()} URL.")
+            print(f"Storage Type: {storage_type}")
+            print(f"Bucket Name: {bucket_name}")
+            print(f"Bucket Path: {bucket_path}")
+            # Check if a second argument exists and use it for full_path
+            full_path = bucket_path
+            if len(sys.argv) > 2:
+                full_path = sys.argv[2]
+            print(f"Full Path: {full_path}")
+            # Inside your main function
+            assert is_valid_path(full_path), f"Invalid path: {full_path}"
+        else:
+            print(f"Error: '{bucket_object}' does not match the expected URL format.")
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -49,8 +49,7 @@ def main():
         for file in lfs_files:
             print(f"  - {file}")
         print("Ensure these files are associated with META files.")
-        sys.exit(0)  # Block the commit
-        # sys.exit(1)  # Block the commit
+        sys.exit(0)
     else:
         print("No new Git LFS objects detected in this commit.")
         sys.exit(0)  # Allow the commit

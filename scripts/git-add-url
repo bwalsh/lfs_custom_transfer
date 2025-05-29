@@ -1,26 +1,137 @@
 #!/usr/bin/env python3
+import argparse
+import hashlib
+import pathlib
+import urllib.parse
 
-import sys
-import re
+import http.client
+import json
+from typing import NamedTuple
+from urllib.parse import urlparse
+
+# This script creates a Git LFS pointer file from a cloud object URL using HEAD metadata only.
+
+POINTER_VERSION = "https://git-lfs.github.com/spec/v1"
+
+def sha256_of_url_and_etag(url, etag):
+    to_hash = f"{url}|{etag or ''}"
+    return hashlib.sha256(to_hash.encode("utf-8")).hexdigest()
+
+def get_s3_metadata(bucket, key) -> tuple:
+    """Fetches metadata for an S3 object using a HEAD request. TODO handle non-aws S3."""
+    parsed_url = urlparse(f"https://{bucket}.s3.amazonaws.com/{key}")
+    conn = http.client.HTTPSConnection(parsed_url.netloc)
+    conn.request("HEAD", parsed_url.path)
+    response = conn.getresponse()
+
+    if response.status != 200:
+        raise ValueError(f"Failed to fetch metadata: {response.status} {response.reason}")
+
+    etag = response.getheader("ETag").strip('"')
+    size = int(response.getheader("Content-Length"))
+    conn.close()
+
+    return etag, size
+
+
+def get_gcs_metadata(bucket, key) -> tuple:
+    """Fetches metadata for a Google Cloud Storage object using a HEAD request."""
+    parsed_url = urlparse(f"https://{bucket}.storage.googleapis.com/{key}")
+    conn = http.client.HTTPSConnection(parsed_url.netloc)
+    conn.request("HEAD", parsed_url.path)
+    response = conn.getresponse()
+
+    if response.status != 200:
+        raise ValueError(f"Failed to fetch metadata: {response.status} {response.reason}")
+
+    etag = response.getheader("ETag").strip('"')
+    size = int(response.getheader("Content-Length"))
+    conn.close()
+
+    return etag, size
+
+def get_azure_metadata(container, blob) -> tuple:
+    """Fetches metadata for an Azure Blob Storage object using a HEAD request."""
+    raise NotImplementedError("Azure Blob Storage metadata retrieval is not implemented in this example.")
+    # if "AZURE_STORAGE_CONNECTION_STRING" not in os.environ:
+    #     raise ValueError("Environment variable AZURE_STORAGE_CONNECTION_STRING is not set.")
+    # conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    # client = BlobServiceClient.from_connection_string(conn_str)
+    # blob_client = client.get_container_client(container).get_blob_client(blob)
+    # props = blob_client.get_blob_properties()
+    # etag = props.etag.strip('"')
+    # size = props.size
+    # return etag, size
+
+Parsed = NamedTuple("Parsed", [("bucket_id", str), ("key_id", str), ("blob_id", str), ("container_id", str), ("scheme", str)])
+
+def parse_uri(url) -> Parsed:
+    sr = urllib.parse.urlparse(url)
+    bucket_id = sr.netloc
+    blob_id = sr.path.lstrip('/')
+    scheme = sr.scheme
+
+    return Parsed( bucket_id=bucket_id, key_id=blob_id, blob_id=blob_id, container_id=bucket_id, scheme=scheme)
+
+def get_metadata_from_url(url):
+    parsed = parse_uri(url)
+    scheme = parsed.scheme
+    if scheme == "s3":
+        etag, size = get_s3_metadata(parsed.bucket_id, parsed.blob_id)
+    elif scheme == "gs":
+        etag, size = get_gcs_metadata(parsed.bucket_id, parsed.blob_id)
+    elif scheme == "azure":
+        etag, size = get_azure_metadata(parsed.container_id, parsed.blob_id)
+    else:
+        raise ValueError(f"Unsupported scheme: {scheme}")
+
+    return etag, size, parsed.scheme, parsed.bucket_id, parsed.blob_id
+
+def create_pointer_file(path, url, etag, size, backend):
+    """Creates a Git LFS pointer file, with our extension at the specified path."""
+    oid = sha256_of_url_and_etag(url, etag)
+    meta = {"origin": url, "backend": backend}
+    if etag:
+        meta["etag"] = etag
+
+    pointer = {
+        "version": POINTER_VERSION,
+        "x-url": json.dumps(meta),
+        "oid": f"sha256:{oid}",
+        "size": size
+    }
+
+    pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w") as f:
+        for k in ["version", "oid", "size", "x-url"]:
+            f.write(f"{k} {pointer[k]}\n")
+
+    print(f"Pointer file created: {path}")
+
+    # create a dummy contents file
+    contents_path = pathlib.Path(".git/lfs/objects/")
+    if not contents_path.exists():
+        raise FileNotFoundError(f"Contents path {contents_path} does not exist. Please run this script from a Git repository with LFS initialized.")
+    contents_path = contents_path / oid[:2] / oid[2:4] / oid
+    contents_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(contents_path, "w") as f:
+        f.write("This is placeholder content for a remote LFS object.\n")
 
 def main():
-    # Check if any arguments are provided
-    if len(sys.argv) < 2:
-        print("Error: No file arguments provided to the add command.")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Create Git LFS pointer from cloud object URL using HEAD metadata only.")
+    parser.add_argument("url", help="Cloud URL (s3://, gs://, azure://)")
+    parser.add_argument("path", nargs="?", default=None, help="Output pointer path (e.g., file.url.lfs)")
 
-    # Regex to match s3:// URLs
-    s3_url_pattern = re.compile(r"^s3://")
+    args = parser.parse_args()
+    url = args.url
 
-    # Iterate over the provided arguments
-    for file_arg in sys.argv[1:]:
-        if s3_url_pattern.match(file_arg):
-            print(f"Info: '{file_arg}' appears to be an S3 URL. Create/Check a META/DocumentReference.ndjson entry.")
-            sys.exit(1)
-
-    # If no S3 URLs are found, allow the operation
-    print("All file arguments are valid.")
-    sys.exit(0)
+    etag, size, backend, bucket_id, key_id = get_metadata_from_url(url)
+    if args.path:
+        path = args.path
+    else:
+        path = key_id
+    create_pointer_file(path, url, etag, size, backend)
 
 if __name__ == "__main__":
     main()

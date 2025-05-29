@@ -3,15 +3,26 @@
 # Check if Git LFS is installed
 if ! git lfs &> /dev/null; then
   echo "Git LFS is not installed. Installing..."
-  git lfs install
+  # Will not download files automatically see https://sabicalija.github.io/git-lfs-intro/
+  git lfs install --skip-smudge
 else
   echo "Git LFS is already installed."
 fi
+
 # configure Git LFS to use our custom transfer agent
 git config lfs.standalonetransferagent local
 git config lfs.customtransfer.local.path "transfer.py"
 git config lfs.customtransfer.local.args ""
 
+# enable for add url testing
+# use our custom smudge and clean filters
+# Get the directory of the current script
+#SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#git config --unset-all filter.lfs.clean
+#git config --unset-all filter.lfs.smudge
+#git config filter.lfs.clean $SCRIPT_DIR/clean
+#git config filter.lfs.smudge $SCRIPT_DIR/smudge
+
 # view config
-git config -l | grep lfs
+git config --list | grep lfs
 

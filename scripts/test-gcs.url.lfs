@@ -1,0 +1,5 @@
+version https://git-lfs.github.com/spec/v1
+oid sha256:78ee04f78286a4c13c5facf532eca1850391b571d7824bd00504ee16bc83296b
+size 160928
+
+x-url {"origin": "gs://gcp-public-data--broad-references/hg38/v0/Homo_sapiens_assembly38.fasta.fai", "backend": "gs", "etag": "f76371b113734a56cde236bc0372de0a"}

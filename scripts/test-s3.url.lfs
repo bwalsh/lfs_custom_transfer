@@ -1,0 +1,5 @@
+version https://git-lfs.github.com/spec/v1
+oid sha256:5afca11e6ee12c32d75ee11acc19ab7e3f8ac04021f2a7f167d7408bcb56e56e
+size 1905700499
+
+x-url {"origin": "s3://1000genomes/phase1/analysis_results/integrated_call_sets/ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz", "backend": "s3", "etag": "6dd768c54a2e0ae1eecd0236d763db40-2"}
