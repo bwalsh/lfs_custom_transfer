@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 # This script creates a Git LFS pointer file from a cloud object URL using HEAD metadata only.
 
-POINTER_VERSION = "https://git-lfs.github.com/spec/v1"
+POINTER_VERSION = "https://git-drs.github.com/spec/v1"
 
 def sha256_of_url_and_etag(url, etag):
     to_hash = f"{url}|{etag or ''}"

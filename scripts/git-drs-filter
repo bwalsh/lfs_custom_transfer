@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+import sys
+import json
+import hashlib
+
+LFS_VERSION = "https://git-lfs.github.com/spec/v1"
+
+
+def read_pkt():
+    """Reads a pkt-line from the remote git process."""
+    sizestr = sys.stdin.read(4)
+    if not sizestr:
+        print(f"no line read from stdin", file=sys.stderr)
+        raise ValueError("read pkt: Failed to read size from stdin")
+
+    size = int(sizestr, 16)
+    if size == 0 or size == 1:  # flush-pkt or delim-pkt
+        print(f"read pkt: size 0 or 1 read", file=sys.stderr)
+        return None
+    pkt_contents = sys.stdin.read(size - 4)
+
+    if len(pkt_contents) + 4 != size:
+        raise ValueError(
+            f"Length of pkt read {len(pkt_contents) + 4:04x} does not match length prefix {size:04x}"
+        )
+    print(f"read pkt: {pkt_contents!r}", file=sys.stderr)
+    return pkt_contents.rstrip()
+
+def write_pkt(data):
+    """Wrap data in a pkt-line.
+
+    Args:
+      data: The data to wrap, as a str or None.
+    Returns: The data prefixed with its length in pkt-line format; if data was
+        None, returns the flush-pkt ('0000').
+    """
+    if data is None:
+        sys.stdout.buffer.write(b"0000")
+        print(f"write pkt: flush", file=sys.stderr)
+        sys.stdout.flush()
+        return
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    elif not isinstance(data, bytes):
+        raise TypeError("data must be a str or bytes")
+    msg = ("%04x" % (len(data) + 4)).encode("ascii") + data
+    sys.stdout.buffer.write(msg)
+    print(f"write pkt: {msg!r}", file=sys.stderr)
+
+def handle_initialization():
+    """Handles the initialization message from git-lfs."""
+    client_msg = read_pkt()
+    assert 'git-filter-client' in client_msg, "Expected git-filter-client in initialization message"
+    version_msg = read_pkt()
+    assert 'version' in version_msg, "Expected version in initialization message"
+    while True:
+        line = read_pkt()
+        if not line:
+            break
+    write_pkt("git-filter-server\n")
+    write_pkt(version_msg + "\n")
+    write_pkt(None)  # flush-pkt
+
+    while True:
+        line = read_pkt()
+        if not line:
+            break
+
+    write_pkt("capability=clean\n")
+    write_pkt("capability=smudge\n")
+    write_pkt(None)  # flush-pkt
+
+
+def read_json_msg():
+    """Expecting a command, create a JSON object from the pkt-line."""
+    lines = []
+    while True:
+        line = read_pkt()
+        if not line:
+            break
+        lines.append(line)
+    command_object = {}
+    for _ in lines:
+        if '=' not in _:
+            print(f"Invalid command line: {_}", file=sys.stderr)
+            continue
+        k, v = _.split("=")
+        command_object[k] = v
+    return command_object
+
+
+def write_json_msg(obj):
+    write_pkt(json.dumps(obj) + '\n')
+    write_pkt(None)  # flush-pkt
+
+def sha256_of_file(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        while chunk := f.read(8192):
+            h.update(chunk)
+    return h.hexdigest()
+
+def handle_clean(msg):
+    print(f"handle_clean: {msg}", file=sys.stderr)
+    pathname = msg.get("pathname")
+    if not pathname:
+        write_json_msg({"error": "missing pathname in clean"})
+        return
+    sha = sha256_of_file(pathname)
+    size = os.path.getsize(pathname)
+    # read contents
+    while True:
+        line = read_pkt()
+        if not line:
+            break
+        print(f"handle_clean: reading contents {line!r}", file=sys.stderr)
+    pointer = (
+        f"version {LFS_VERSION}\n"
+        f"oid sha256:{sha}\n"
+        f"size {size}\n"
+        f"x-note clean filter ran\n"
+    )
+    write_pkt("status=success\n")
+    write_pkt(None) # flush-pkt
+    write_pkt(pointer)
+    write_pkt(None) # flush-pkt
+    write_pkt(None) # flush-pkt
+
+def handle_smudge(msg):
+    # for demo, return a fake file content
+    pointer = msg.get("file", "")
+    if "oid sha256" in pointer:
+        content = b"This is fake binary content restored by smudge\n"
+        sys.stdout.buffer.write(json.dumps({"file": content.decode("utf-8")}).encode('utf-8') + b"\n")
+    else:
+        write_json_msg({"file": pointer})
+
+def main():
+    # respond to init message
+    handle_initialization()
+
+    try:
+        while True:
+            msg = read_json_msg()
+            if msg is None:
+                continue
+            cmd = msg.get("command")
+            if cmd == "clean":
+                handle_clean(msg)
+            elif cmd == "smudge":
+                handle_smudge(msg)
+            elif cmd == "terminate":
+                break
+            else:
+                print(f"unsupported command {cmd}", file=sys.stderr)
+                break
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+
+if __name__ == "__main__":
+    import os
+    main()

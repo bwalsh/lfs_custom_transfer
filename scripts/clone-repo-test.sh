@@ -1,5 +1,6 @@
 #!/bin/bash
 
+set -e  # Exit immediately if a command exits with a non-zero status
 
 # Check if the script is in the PATH
 if ! command -v setup-lfs.sh &> /dev/null; then
@@ -23,7 +24,7 @@ cat myfile.bin  | grep -q git-lfs && echo "OK: is lfs pointer" || echo "FAIL: ex
 cat myfile2.bin  | grep -q git-lfs && echo "OK: is lfs pointer" || echo "FAIL: expected a lfs pointer"
 
 # enable for add url testing
-# cat phase1/analysis_results/integrated_call_sets/ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz | grep -q git-lfs && echo "OK: is lfs pointer" || echo "FAIL: expected a lfs pointer"
+cat phase1/analysis_results/integrated_call_sets/ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz | grep -q git-lfs && echo "OK: is lfs pointer" || echo "FAIL: expected a lfs pointer"
 
 
 echo lfs pulling files individually

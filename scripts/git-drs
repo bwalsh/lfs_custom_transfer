@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+import os
+import pathlib
+import re
+import sys
+import json
+import hashlib
+import http.client
+import urllib
+from typing import NamedTuple
+from urllib.parse import urlparse
+
+
+REMOTE_URL_BASE = "https://example.com/objects"
+
+def compute_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(8192):
+            h.update(chunk)
+    return h.hexdigest()
+
+def emit_pointer(oid, size, url=None):
+    pointer = {
+        "version": "https://git-lfs.github.com/spec/v1",
+        "oid": f"sha256:{oid}",
+        "size": size,
+        "remote": "custom"
+    }
+    if url:
+        pointer["url"] = url
+    sys.stdout.write(json.dumps(pointer) + "\n")
+
+def filter_clean(path):
+    oid = compute_sha256(path)
+    size = os.path.getsize(path)
+    url = f"{REMOTE_URL_BASE}/{oid}"
+    emit_pointer(oid, size, url)
+
+def filter_smudge():
+    pointer = json.load(sys.stdin)
+    oid = pointer["oid"].split(":")[1]
+    url = pointer.get("url", f"{REMOTE_URL_BASE}/{oid}")
+    sys.stdout.write(f"[smudge] Simulated fetch of {oid} from {url}\n")
+
+def transfer_agent():
+    print(json.dumps({
+        "event": "init",
+        "operation": ["download", "upload"]
+    }))
+    sys.stdout.flush()
+
+    for line in sys.stdin:
+        msg = json.loads(line)
+        event = msg.get("event")
+        if event == "terminate":
+            break
+        elif event == "download":
+            oid = msg["oid"]
+            path = msg["path"]
+            with open(path, "w") as f:
+                f.write(f"[download] Simulated content for {oid}\n")
+            print(json.dumps({"event": "complete", "oid": oid, "path": path}))
+            sys.stdout.flush()
+        elif event == "upload":
+            oid = msg["oid"]
+            path = msg["path"]
+            size = os.path.getsize(path)
+            print(json.dumps({
+                "event": "complete",
+                "oid": oid,
+                "size": size
+            }))
+            sys.stdout.flush()
+
+
+
+def fetch_s3_content(bucket, key, destination_path):
+    """Fetches content from an S3 bucket and writes it to the destination path."""
+    parsed_url = urlparse(f"https://{bucket}.s3.amazonaws.com/{key}")
+
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(destination_path, "wb") as f:
+        f.write(f"Simulated content from {parsed_url}".encode())
+
+    print(f"Content fetched from S3 and saved to {destination_path}")
+
+    # conn = http.client.HTTPSConnection(parsed_url.netloc)
+    # conn.request("GET", parsed_url.path)
+    # response = conn.getresponse()
+    #
+    # if response.status != 200:
+    #     raise ValueError(f"Failed to fetch content from S3: {response.status} {response.reason}")
+    #
+    # destination_path.parent.mkdir(parents=True, exist_ok=True)
+    # with open(destination_path, "wb") as f:
+    #     f.write(response.read())
+    #
+    # conn.close()
+    # print(f"Content fetched from S3 and saved to {destination_path}")
+
+
+def fetch_gcs_content(url, destination_path):
+    """Fetches content from Google Cloud Storage and writes it to the destination path."""
+    parsed_url = urlparse(url)
+    conn = http.client.HTTPSConnection(parsed_url.netloc)
+    conn.request("GET", parsed_url.path)
+    response = conn.getresponse()
+
+    if response.status != 200:
+        raise ValueError(f"Failed to fetch content from GCS: {response.status} {response.reason}")
+
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(destination_path, "wb") as f:
+        f.write(response.read())
+
+    conn.close()
+    print(f"Content fetched from GCS and saved to {destination_path}")
+
+
+def fetch_azure_content(url, destination_path):
+    """Fetches content from Azure Blob Storage and writes it to the destination path."""
+    raise NotImplementedError("Azure Blob Storage content fetching is not implemented.")
+    # Example implementation would require Azure SDK:
+    # from azure.storage.blob import BlobServiceClient
+    # conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    # client = BlobServiceClient.from_connection_string(conn_str)
+    # blob_client = client.get_blob_client(container=container, blob=blob)
+    # with open(destination_path, "wb") as f:
+    #     f.write(blob_client.download_blob().readall())
+
+
+
+def pull():
+    print("Starting DRS pull operation...")
+    for root, _, files in os.walk("."):
+        for name in files:
+            path = os.path.join(root, name)
+            # Skip .git/ and hidden dirs
+            if ".git" in path.split(os.sep):
+                continue
+            if is_pointer_file(path):
+                pointer = parse_lfs_pointer(path)
+                oid = pointer["oid"].split(":")[1]
+                contents_path = pathlib.Path(".git/lfs/objects/") / oid[:2] / oid[2:4] / oid
+
+                # if contents_path.exists():
+                #     print(f"Content for {path} already exists.")
+                #     continue
+
+                print(f"Fetching content for {path}...")
+                url = pointer["x-url"]["origin"]
+                etag = pointer["x-url"].get("etag", "")
+                backend = pointer["x-url"]["backend"]
+
+                parsed = parse_uri(url)
+
+                # Fetch content based on backend
+                if backend == "s3":
+                    fetch_s3_content(parsed.bucket_id, parsed.blob_id, contents_path)
+                elif backend == "gs":
+                    fetch_gcs_content(url, contents_path)
+                elif backend == "azure":
+                    fetch_azure_content(url, contents_path)
+                else:
+                    raise ValueError(f"Unsupported backend: {backend}")
+
+                print(f"Content fetched and stored at {contents_path}")
+
+    print("DRS pull operation completed.")
+
+POINTER_VERSION = "https://git-drs.github.com/spec/v1"
+
+def sha256_of_url_and_etag(url, etag):
+    to_hash = f"{url}|{etag or ''}"
+    return hashlib.sha256(to_hash.encode("utf-8")).hexdigest()
+
+def get_s3_metadata(bucket, key) -> tuple:
+    """Fetches metadata for an S3 object using a HEAD request. TODO handle non-aws S3."""
+    parsed_url = urlparse(f"https://{bucket}.s3.amazonaws.com/{key}")
+    conn = http.client.HTTPSConnection(parsed_url.netloc)
+    conn.request("HEAD", parsed_url.path)
+    response = conn.getresponse()
+
+    if response.status != 200:
+        raise ValueError(f"Failed to fetch metadata: {response.status} {response.reason}")
+
+    etag = response.getheader("ETag").strip('"')
+    size = int(response.getheader("Content-Length"))
+    conn.close()
+
+    return etag, size
+
+
+def get_gcs_metadata(bucket, key) -> tuple:
+    """Fetches metadata for a Google Cloud Storage object using a HEAD request."""
+    parsed_url = urlparse(f"https://{bucket}.storage.googleapis.com/{key}")
+    conn = http.client.HTTPSConnection(parsed_url.netloc)
+    conn.request("HEAD", parsed_url.path)
+    response = conn.getresponse()
+
+    if response.status != 200:
+        raise ValueError(f"Failed to fetch metadata: {response.status} {response.reason}")
+
+    etag = response.getheader("ETag").strip('"')
+    size = int(response.getheader("Content-Length"))
+    conn.close()
+
+    return etag, size
+
+def get_azure_metadata(container, blob) -> tuple:
+    """Fetches metadata for an Azure Blob Storage object using a HEAD request."""
+    raise NotImplementedError("Azure Blob Storage metadata retrieval is not implemented in this example.")
+    # if "AZURE_STORAGE_CONNECTION_STRING" not in os.environ:
+    #     raise ValueError("Environment variable AZURE_STORAGE_CONNECTION_STRING is not set.")
+    # conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    # client = BlobServiceClient.from_connection_string(conn_str)
+    # blob_client = client.get_container_client(container).get_blob_client(blob)
+    # props = blob_client.get_blob_properties()
+    # etag = props.etag.strip('"')
+    # size = props.size
+    # return etag, size
+
+Parsed = NamedTuple("Parsed", [("bucket_id", str), ("key_id", str), ("blob_id", str), ("container_id", str), ("scheme", str)])
+
+def parse_uri(url) -> Parsed:
+    sr = urllib.parse.urlparse(url)
+    bucket_id = sr.netloc
+    blob_id = sr.path.lstrip('/')
+    scheme = sr.scheme
+
+    return Parsed( bucket_id=bucket_id, key_id=blob_id, blob_id=blob_id, container_id=bucket_id, scheme=scheme)
+
+def get_metadata_from_url(url):
+    parsed = parse_uri(url)
+    scheme = parsed.scheme
+    if scheme == "s3":
+        etag, size = get_s3_metadata(parsed.bucket_id, parsed.blob_id)
+    elif scheme == "gs":
+        etag, size = get_gcs_metadata(parsed.bucket_id, parsed.blob_id)
+    elif scheme == "azure":
+        etag, size = get_azure_metadata(parsed.container_id, parsed.blob_id)
+    else:
+        raise ValueError(f"Unsupported scheme: {scheme}")
+
+    return etag, size, parsed.scheme, parsed.bucket_id, parsed.blob_id
+
+def create_pointer_file(path, url, etag, size, backend):
+    """Creates a Git LFS pointer file, with our extension at the specified path."""
+    oid = sha256_of_url_and_etag(url, etag)
+    meta = {"origin": url, "backend": backend}
+    if etag:
+        meta["etag"] = etag
+
+    pointer = {
+        "version": POINTER_VERSION,
+        "x-url": json.dumps(meta),
+        "oid": f"sha256:{oid}",
+        "size": size
+    }
+
+    pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w") as f:
+        for k in ["version", "oid", "size", "x-url"]:
+            f.write(f"{k} {pointer[k]}\n")
+
+    print(f"Pointer file created: {path}")
+
+    # create a dummy contents file
+    contents_path = pathlib.Path(".git/lfs/objects/")
+    if not contents_path.exists():
+        raise FileNotFoundError(f"Contents path {contents_path} does not exist. Please run this script from a Git repository with LFS initialized.")
+    contents_path = contents_path / oid[:2] / oid[2:4] / oid
+    contents_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(contents_path, "w") as f:
+        f.write("This is placeholder content for a remote LFS object.\n")
+
+
+def add_url(remote_url, path):
+    try:
+        etag, size, backend, bucket_id, key_id = get_metadata_from_url(remote_url)
+        if not path:
+            path = key_id
+        create_pointer_file(path, remote_url, etag, size, backend)
+
+    except Exception as e:
+        sys.stderr.write(f"Failed to fetch HEAD for {remote_url}: {e}\n")
+        sys.exit(1)
+
+
+def track(pattern):
+    gitattributes_path = ".gitattributes"
+    new_line = f"{pattern} filter=drs\n"
+    updated = False
+
+    # Read existing lines (if any)
+    lines = []
+    if os.path.exists(gitattributes_path):
+        with open(gitattributes_path, "r") as f:
+            lines = f.readlines()
+
+    # Replace existing line if pattern already tracked
+    for i, line in enumerate(lines):
+        if line.startswith(f"{pattern} "):
+            lines[i] = new_line
+            updated = True
+            break
+
+    if not updated:
+        lines.append(new_line)
+
+    with open(gitattributes_path, "w") as f:
+        f.writelines(lines)
+
+    print(f'Tracked "{pattern}" with filter=drs')
+
+
+def is_pointer_file(path):
+    # print(f"Checking if {path} is a pointer file...")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for _ in range(5):  # Only check first few lines
+                line = f.readline()
+                if 'https://git-drs.github.com/spec/v1' in line:
+                    return True
+    except Exception:
+        return False
+    return False
+
+
+def parse_lfs_pointer(path):
+    pointer = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key_value = line.split(" ", 1)
+            if len(key_value) != 2:
+                raise ValueError(f"Malformed pointer line: {line}")
+            key, value = key_value
+            pointer[key] = value
+            if key == 'x-url':
+                try:
+                    pointer[key] = json.loads(value)
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Invalid JSON in x-url: {value}") from e
+
+    # Validate required fields
+    if pointer.get("version") != "https://git-drs.github.com/spec/v1":
+        raise ValueError("Invalid LFS pointer version")
+    if "oid" not in pointer or not re.match(r"sha256:[a-f0-9]{64}", pointer["oid"]):
+        raise ValueError("Invalid or missing oid")
+    if "size" not in pointer or not pointer["size"].isdigit():
+        raise ValueError("Invalid or missing size")
+
+    return pointer
+
+
+def ls_files():
+    for root, _, files in os.walk("."):
+        for name in files:
+            path = os.path.join(root, name)
+            # Skip .git/ and hidden dirs
+            if ".git" in path.split(os.sep):
+                continue
+            if is_pointer_file(path):
+                pointer = parse_lfs_pointer(path)
+                # print(f"{path} -> {pointer}")
+                # check staging area to see if content is staged
+                oid = pointer["oid"].split(":")[1]
+                contents_path = pathlib.Path(".git/lfs/objects/")
+                contents_path = contents_path / oid[:2] / oid[2:4] / oid
+
+                staged = "*" if contents_path.exists() else "-"
+                print(oid, staged, path)
+
+
+def usage():
+    print("Usage:")
+    print("  drs clean <file>")
+    print("  drs smudge")
+    print("  drs transfer")
+    print("  drs read-pointer <file>")
+    print("  drs add url <remote_url>")
+    print("  drs track <pattern>")
+    print("  drs ls-files")
+
+if __name__ == "__main__":
+
+    print(f"DRS filter script starting... {sys.argv}")
+
+    if len(sys.argv) < 2:
+        usage()
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+    if cmd == "clean" and len(sys.argv) == 3:
+        filter_clean(sys.argv[2])
+    elif cmd == "smudge":
+        filter_smudge()
+    elif cmd == "transfer":
+        transfer_agent()
+    elif cmd == "read-pointer" and len(sys.argv) == 3:
+        read_pointer(sys.argv[2])
+    elif cmd == "add-url":
+        path = sys.argv[3] if len(sys.argv) > 3 else None
+        add_url(sys.argv[2], path)
+    elif cmd == "track" and len(sys.argv) == 3:
+        track(sys.argv[2])
+    elif cmd == "ls-files":
+        ls_files()
+    elif cmd == "pull":
+        pull()
+    else:
+        usage()
+        sys.exit(1)

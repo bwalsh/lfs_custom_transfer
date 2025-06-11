@@ -1,4 +1,8 @@
 #!/bin/bash
+
+set -e  # Exit immediately if a command exits with a non-zero status
+
+
 # Check if the script is in the PATH
 if ! command -v setup-lfs.sh &> /dev/null; then
   echo "Warning: setup-lfs.sh is not in your PATH. Please add it to your PATH to use it globally."
@@ -25,8 +29,12 @@ git remote add origin https://github.com/bwalsh/ttt.git
 
 # Configure Git LFS to track files with the .bin extension
 
+# we will use the "stock"  lfs, with our transfer agent to handle *.bin files
 git lfs track "*.bin"
-git lfs track "*.vcf.gz"
+# we will use the "custom" filter drs, with our transfer agent to handle *.vcf.gz files
+git drs track "*.vcf.gz"
+echo '*.txt filter=customlfs' >> .gitattributes
+
 git add .gitattributes
 git commit -m "Add .gitattributes"
 
@@ -44,11 +52,13 @@ echo "Hello LFS 2" > myfile2.bin
 git add myfile2.bin
 git commit -m "Add myfile2.bin"
 
+
 # enable for add url testing
-#git add-url s3://1000genomes/phase1/analysis_results/integrated_call_sets/ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz
+export GIT_TRACE=1
+git drs add-url s3://1000genomes/phase1/analysis_results/integrated_call_sets/ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz
 ## TODO - this add is extraneous. Should happen automatically
-#git add phase1/analysis_results/integrated_call_sets/ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz
-#git commit -m "Add genotypes.vcf.gz"
+git add phase1/analysis_results/integrated_call_sets/ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz
+git commit -m "Add genotypes.vcf.gz"
 
 git push -f origin main
 
@@ -60,7 +70,7 @@ else
 fi
 
 # Check if myfile.bin is a Git LFS pointer file
-if git lfs ls-files | grep -q "genotypes.vcf.gz"; then
+if git drs ls-files | grep -q "genotypes.vcf.gz"; then
   echo "genotypes.vcf.gz is listed as a LFS pointer file."
 else
   echo "genotypes.vcf.gz is NOT a Git LFS pointer file."
